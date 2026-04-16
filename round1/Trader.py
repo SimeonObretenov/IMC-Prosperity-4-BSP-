@@ -1,13 +1,11 @@
-from itertools import product
 import json
-from math import ceil, floor
+import math
 from typing import Any, List
 
 try:
     from datamodel import Listing, Observation, Order, OrderDepth, ProsperityEncoder, Symbol, Trade, TradingState
 except ImportError:
     from prosperity3bt.datamodel import Listing, Observation, Order, OrderDepth, ProsperityEncoder, Symbol, Trade, TradingState
-
 
 class Logger:
     def __init__(self) -> None:
@@ -136,24 +134,23 @@ class Logger:
 
         return out
 
-
 logger = Logger()
-
 
 class Trader:
     def __init__(self):
-        # --- Shared Hyperparameters ---
-        self.POSITION_LIMIT = 80
+        # --- ASH_COATED_OSMIUM Hyperparameters ---
+        self.POSITION_LIMIT_OSMIUM = 80
+        self.MAX_SKEW = 5       
+        self.MARGIN = 1        
+        self.FAIR_VALUE = 10000 
 
-        # --- OSMIUM Market Making Hyperparameters ---
-        self.OSMIUM_MAX_SKEW = 3
-        self.OSMIUM_MARGIN = 1
-        self.OSMIUM_FAIR_VALUE = 10000
+        # --- INTARIAN_PEPPER_ROOT Hyperparameters ---
+        self.POSITION_LIMIT_PEPPER = 80 
 
     def run(self, state: TradingState):
         result = {}
         conversions = 0
-
+        
         trader_state = {}
         if state.traderData:
             try:
@@ -161,117 +158,114 @@ class Trader:
             except json.JSONDecodeError:
                 trader_state = {}
 
-        # ========================================
-        # Strategy 1: ASH_COATED_OSMIUM (Market Making)
-        # ========================================
-        self.trade_osmium(state, result)
+        # =========================================================
+        # 1. ASH_COATED_OSMIUM STRATEGY
+        # =========================================================
+        product_osmium = "ASH_COATED_OSMIUM"
 
-        # ========================================
-        # Strategy 2: INTARIAN_PEPPER_ROOT (Buy & Hold)
-        # ========================================
-        self.trade_peppers(state, result)
+        if product_osmium in state.order_depths:
+            order_depth: OrderDepth = state.order_depths[product_osmium]
+            orders: List[Order] = []
+            
+            if len(order_depth.buy_orders) != 0 and len(order_depth.sell_orders) != 0:
+                
+                # --- Order Book Extraction ---
+                best_bid = max(order_depth.buy_orders.keys())
+                best_ask = min(order_depth.sell_orders.keys())
+                
+                best_bid_vol = order_depth.buy_orders[best_bid]
+                best_ask_vol = abs(order_depth.sell_orders[best_ask])
+                
+                current_position = state.position.get(product_osmium, 0)
+                
+                # --- Dynamic Continuous Inventory Skew (Quadratic Deadband) ---
+                inventory_ratio = current_position / self.POSITION_LIMIT_OSMIUM 
+                raw_skew = math.copysign((abs(inventory_ratio) ** 2) * self.MAX_SKEW, inventory_ratio)
+                
+                skew_amount = round(raw_skew)
+                
+                # --- Base Pricing (Titanium Guardrails) ---
+                raw_base_bid = self.FAIR_VALUE - self.MARGIN - skew_amount
+                raw_base_ask = self.FAIR_VALUE + self.MARGIN - skew_amount
+                
+                base_bid = min(self.FAIR_VALUE, raw_base_bid)
+                base_ask = max(self.FAIR_VALUE, raw_base_ask)
+                    
+                # --- Predictive Order Book Imbalance (Micro-Momentum) ---
+                total_vol = best_bid_vol + best_ask_vol
+                obi = best_bid_vol / total_vol if total_vol > 0 else 0.5
+                
+                if obi >= 0.85:
+                    base_bid += 1
+                    base_ask += 1
+                elif obi <= 0.15:
+                    base_bid -= 1
+                    base_ask -= 1
 
+                buy_volume_left = self.POSITION_LIMIT_OSMIUM - current_position
+                sell_volume_left = self.POSITION_LIMIT_OSMIUM + current_position 
+                
+                # --- Market Taking (Surgical Gap Exploitation) ---
+                for ask_price, ask_vol_raw in sorted(order_depth.sell_orders.items()):
+                    ask_vol = abs(ask_vol_raw)
+                    if ask_price <= base_bid and buy_volume_left > 0:
+                        vol_to_take = min(buy_volume_left, ask_vol)
+                        orders.append(Order(product_osmium, ask_price, vol_to_take))
+                        buy_volume_left -= vol_to_take
+                
+                for bid_price, bid_vol in sorted(order_depth.buy_orders.items(), reverse=True):
+                    if bid_price >= base_ask and sell_volume_left > 0:
+                        vol_to_take = min(sell_volume_left, bid_vol)
+                        orders.append(Order(product_osmium, bid_price, -vol_to_take))
+                        sell_volume_left -= vol_to_take
+
+                # --- Market Making (Passive Pennying) ---
+                proposed_bid = best_bid + 1
+                proposed_ask = best_ask - 1
+
+                our_bid_price = min(base_bid, proposed_bid)
+                our_ask_price = max(base_ask, proposed_ask)
+                
+                if our_bid_price >= our_ask_price:
+                    our_bid_price = base_bid
+                    our_ask_price = base_ask
+                
+                # --- Post Remaining Capacity passively ---
+                if buy_volume_left > 0:
+                    orders.append(Order(product_osmium, our_bid_price, buy_volume_left))
+                    
+                if sell_volume_left > 0:
+                    orders.append(Order(product_osmium, our_ask_price, -sell_volume_left))
+                    
+                result[product_osmium] = orders
+
+        # =========================================================
+        # 2. INTARIAN_PEPPER_ROOT STRATEGY
+        # =========================================================
+        product_pepper = "INTARIAN_PEPPER_ROOT"
+
+        if product_pepper in state.order_depths:
+            order_depth: OrderDepth = state.order_depths[product_pepper]
+            orders: List[Order] = []
+            
+            if len(order_depth.sell_orders) != 0:
+                
+                # --- Order Book Extraction ---
+                best_ask = min(order_depth.sell_orders.keys())
+                current_position = state.position.get(product_pepper, 0)
+                
+                # --- Buy and Hold Execution ---
+                max_buy_volume = self.POSITION_LIMIT_PEPPER - current_position
+                
+                if max_buy_volume > 0:
+                    orders.append(Order(product_pepper, best_ask, max_buy_volume))
+                    
+                result[product_pepper] = orders
+                
+        # =========================================================
+        # CLEANUP & LOGGING
+        # =========================================================
         traderData = json.dumps(trader_state)
         logger.flush(state, result, conversions, traderData)
+        
         return result, conversions, traderData
-
-    def trade_osmium(self, state: TradingState, result: dict):
-        """OSMIUM-BEST strategy: Market making with inventory skew and gap exploitation."""
-        product = "ASH_COATED_OSMIUM"
-
-        if product not in state.order_depths:
-            return
-
-        order_depth: OrderDepth = state.order_depths[product]
-        orders: List[Order] = []
-
-        if len(order_depth.buy_orders) == 0 or len(order_depth.sell_orders) == 0:
-            return
-
-        # --- 1. Order Book Extraction ---
-        best_bid = max(order_depth.buy_orders.keys())
-        best_ask = min(order_depth.sell_orders.keys())
-
-        best_bid_vol = order_depth.buy_orders[best_bid]
-        best_ask_vol = abs(order_depth.sell_orders[best_ask])
-
-        current_position = state.position.get(product, 0)
-
-        # --- 2. Dynamic Continuous Inventory Skew ---
-        inventory_ratio = current_position / self.POSITION_LIMIT
-        raw_skew = inventory_ratio * self.OSMIUM_MAX_SKEW
-
-        if raw_skew > 0:
-            skew_amount = ceil(raw_skew)
-        elif raw_skew < 0:
-            skew_amount = floor(raw_skew)
-        else:
-            skew_amount = 0
-
-        # --- 3. Base Pricing ---
-        base_bid = self.OSMIUM_FAIR_VALUE - self.OSMIUM_MARGIN - skew_amount
-        base_ask = self.OSMIUM_FAIR_VALUE + self.OSMIUM_MARGIN - skew_amount
-
-        # --- 4. Predictive Order Book Imbalance (Micro-Momentum) ---
-        total_vol = best_bid_vol + best_ask_vol
-        obi = best_bid_vol / total_vol if total_vol > 0 else 0.5
-
-        if obi >= 0.75:
-            base_bid += 1
-            base_ask += 1
-        elif obi <= 0.25:
-            base_bid -= 1
-            base_ask -= 1
-
-        # --- 5. Market Making vs. Market Taking (Gap Exploitation) ---
-        if best_ask < base_bid:
-            our_bid_price = base_bid
-            our_ask_price = base_ask
-        elif best_bid > base_ask:
-            our_ask_price = base_ask
-            our_bid_price = base_bid
-        else:
-            our_bid_price = min(base_bid, best_bid + 1)
-            our_ask_price = max(base_ask, best_ask - 1)
-
-            if our_bid_price >= our_ask_price:
-                our_bid_price = base_bid
-                our_ask_price = base_ask
-
-        # --- 6. Order Placement Execution ---
-        max_buy_volume = self.POSITION_LIMIT - current_position
-        max_sell_volume = -self.POSITION_LIMIT - current_position
-
-        if max_buy_volume > 0:
-            orders.append(Order(product, our_bid_price, max_buy_volume))
-
-        if max_sell_volume < 0:
-            orders.append(Order(product, our_ask_price, max_sell_volume))
-
-        result[product] = orders
-
-    def trade_peppers(self, state: TradingState, result: dict):
-        """PEPPERS Buy & Hold strategy: Aggressively buy and hold until position limit."""
-        product = "INTARIAN_PEPPER_ROOT"
-
-        if product not in state.order_depths:
-            return
-
-        order_depth: OrderDepth = state.order_depths[product]
-        orders: List[Order] = []
-
-        if len(order_depth.sell_orders) == 0:
-            return
-
-        # Get the best ask price
-        best_ask = min(order_depth.sell_orders.keys())
-
-        current_position = state.position.get(product, 0)
-
-        # Buy as much as possible up to position limit
-        max_buy_volume = self.POSITION_LIMIT - current_position
-
-        if max_buy_volume > 0:
-            orders.append(Order(product, best_ask, max_buy_volume))
-
-        result[product] = orders
